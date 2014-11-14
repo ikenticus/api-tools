@@ -41,7 +41,10 @@ def download_album (auth, id, rootdir):
     photos = get_album_photos(auth, id)
     for photo in photos:
         filename = '%s/%s.jpg' % (rootdir, photo.get('title').lower())
-        download_photo(auth, photo.get('id'), filename)
+        if os.path.exists(filename):
+            sys.stderr.write('Skipping download, already exists: %s\n' % filename)
+        else:
+            download_photo(auth, photo.get('id'), filename)
 
 def download_albums (auth, albums, rootdir):
     for album in albums.keys():
