@@ -1,3 +1,4 @@
 *.pyc
 *.cache
-*-keys.py
+*_keys.py
+photos/

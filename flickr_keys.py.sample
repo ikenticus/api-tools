@@ -1,0 +1,3 @@
+# token-label
+APIKEY = 'gibberish'
+SECRET = 'enigma'
