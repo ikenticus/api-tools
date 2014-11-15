@@ -25,17 +25,45 @@ def action_download (auth, args):
     download_collections (auth, get_collections(auth), rootdir)
 
 def action_upload (auth, args):
-    print args
+    rootdir = args[0] if len(args) > 0 else ROOTDIR
+    online = get_collections(auth)
+    # check dummy photo
+    upload_directories (auth, online, rootdir)
+
+def action_view (auth, args):
     pprint(get_collections(auth))
 
 ACTIONS = {
     'download': action_download,
     'upload': action_upload,
+    'view': action_view,
 }
 
 def check_make_dir (path):
     if not os.path.exists(path):
         os.makedirs(path)
+
+def create_album (auth, cdict, title, photo):
+    url = get_sig_url('%s?method=flickr.collections.create&user_id=%s&auth_token=%s&title=%s&primary_photo_id=%s' \
+            % (URL.get('rest'), auth.get('user'), auth.get('token'), title, photo))
+    try:
+        response = requests.get(url)
+        contents = etree.fromstring(str(response.text))
+        cdict[title] = { 'id': contents.xpath('photoset/@id')[0] }
+        return cdict
+    except:
+        raise Exception('Failed to create album: %s' % title)
+
+def create_collection (auth, cdict, title, parent):
+    url = get_sig_url('%s?method=flickr.collections.create&user_id=%s&auth_token=%s&title=%s&parent_id=%s' \
+            % (URL.get('rest'), auth.get('user'), auth.get('token'), title, parent))
+    try:
+        response = requests.get(url)
+        contents = etree.fromstring(str(response.text))
+        cdict[title] = { 'id': contents.xpath('collection/@id')[0] }
+        return cdict
+    except:
+        raise Exception('Failed to create collection: %s' % title)
 
 def download_album (auth, id, rootdir):
     photos = get_album_photos(auth, id)
@@ -76,6 +104,17 @@ def download_photo (auth, id, filename):
         sys.stdout.write('Downloaded %s: %s\n' % (photo.get('label'), filename))
     except:
         raise Exception('Failed to retrieve photo')
+
+def edit_collection (auth, collection, albums, delete=0):
+    url = get_sig_url('%s?method=flickr.collections.editSets&user_id=%s&auth_token=%s&collection_id=%s&photoset_ids=%s&do_remove=%s' \
+            % (URL.get('rest'), auth.get('user'), auth.get('token'), collection, albums, delete))
+    try:
+        response = requests.get(url)
+        print response.text
+        contents = etree.fromstring(str(response.text))
+        sys.exit(1)
+    except:
+        raise Exception('Failed to edit collection: %s' % collection)
 
 def get_album_photos (auth, albumid, perpage=PERPAGE, page=1, photos=[]):
     url = get_sig_url('%s?method=flickr.photosets.getPhotos&user_id=%s&auth_token=%s&photoset_id=%s&page=%s&per_page=%s' \
@@ -189,6 +228,30 @@ def loop_collection (xlist, parent=None):
             xdict[title]['album'] = loop_collection(node.xpath('set'), parent=title)
     return xdict
 
+def upload_directories (auth, online, rootdir):
+    for root, dnames, fnames in os.walk(rootdir):
+        croot = root.replace(rootdir + '/', '')
+        for dname in dnames:
+            if root == rootdir:
+                if not online.get(dname):
+                    online = create_collection (auth, online, dname, 0)
+            elif dname.startswith(os.path.basename(root)):
+                print 'create new year-month ' + dname
+                sub = online.get(croot)
+                if not sub.get('collection'):
+                    sub['collection'] = {}
+                if not sub.get('collection').get(dname):
+                    sub['collection'] = create_collection (auth, sub['collection'], dname, sub.get('id'))
+            else:
+                print '\n-- Create album'
+                # add dummy photo to create new album
+                print croot.split('/'), dname
+        for fname in fnames:
+            print '%s/%s' % (root, fname)
+            # after uploading photos to album, remove dummy photo
+            # reorder album chronologically
+    pprint(online)
+
 def usage():
     print """Usage: %s action [rootdir:photos]
 
@@ -211,7 +274,7 @@ if __name__ == '__main__':
         auth = cPickle.load(cache)
         cache.close()
     except:
-        (user, token) = get_auth(get_frob(), 'read')
+        (user, token) = get_auth(get_frob(), 'write')
         auth = { 'user': user, 'token': token, 'date': today }  
         cache = open(FROBFILE, 'w')
         cPickle.dump(auth, cache)
