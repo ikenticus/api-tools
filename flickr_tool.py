@@ -44,8 +44,8 @@ def check_make_dir (path):
         os.makedirs(path)
 
 def create_album (auth, cdict, title, photo):
-    url = get_sig_url('%s?method=flickr.collections.create&user_id=%s&auth_token=%s&title=%s&primary_photo_id=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token'), title, photo))
+    url = get_sig_url('%s?method=flickr.collections.create&title=%s&primary_photo_id=%s' \
+            % (URL.get('rest'), title, photo), auth)
     try:
         response = requests.get(url)
         contents = etree.fromstring(str(response.text))
@@ -55,8 +55,8 @@ def create_album (auth, cdict, title, photo):
         raise Exception('Failed to create album: %s' % title)
 
 def create_collection (auth, cdict, title, parent):
-    url = get_sig_url('%s?method=flickr.collections.create&user_id=%s&auth_token=%s&title=%s&parent_id=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token'), title, parent))
+    url = get_sig_url('%s?method=flickr.collections.create&title=%s&parent_id=%s' \
+            % (URL.get('rest'), title, parent), auth)
     try:
         response = requests.get(url)
         contents = etree.fromstring(str(response.text))
@@ -106,8 +106,8 @@ def download_photo (auth, id, filename):
         raise Exception('Failed to retrieve photo')
 
 def edit_collection (auth, collection, albums, delete=0):
-    url = get_sig_url('%s?method=flickr.collections.editSets&user_id=%s&auth_token=%s&collection_id=%s&photoset_ids=%s&do_remove=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token'), collection, albums, delete))
+    url = get_sig_url('%s?method=flickr.collections.editSets&collection_id=%s&photoset_ids=%s&do_remove=%s' \
+            % (URL.get('rest'), collection, albums, delete), auth)
     try:
         response = requests.get(url)
         print response.text
@@ -117,8 +117,8 @@ def edit_collection (auth, collection, albums, delete=0):
         raise Exception('Failed to edit collection: %s' % collection)
 
 def get_album_photos (auth, albumid, perpage=PERPAGE, page=1, photos=[]):
-    url = get_sig_url('%s?method=flickr.photosets.getPhotos&user_id=%s&auth_token=%s&photoset_id=%s&page=%s&per_page=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token'), albumid, page, perpage))
+    url = get_sig_url('%s?method=flickr.photosets.getPhotos&photoset_id=%s&page=%s&per_page=%s' \
+            % (URL.get('rest'), albumid, page, perpage), auth)
     try:
         response = requests.get(url)
         contents = etree.fromstring(str(response.text))
@@ -136,8 +136,7 @@ def get_album_photos (auth, albumid, perpage=PERPAGE, page=1, photos=[]):
 
 def get_albums (auth):
     albums = []
-    url = get_sig_url('%s?method=flickr.photosets.getList&user_id=%s&auth_token=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token')))
+    url = get_sig_url('%s?method=flickr.photosets.getList' % URL.get('rest'), auth)
     try:
         response = requests.get(url)
         contents = etree.fromstring(str(response.text))
@@ -158,8 +157,7 @@ def get_auth (frob, perms):
     return get_token(frob)
 
 def get_collections (auth):
-    url = get_sig_url('%s?method=flickr.collections.getTree&user_id=%s&auth_token=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token')))
+    url = get_sig_url('%s?method=flickr.collections.getTree' % URL.get('rest'), auth)
     try:
         response = requests.get(url)
         contents = etree.fromstring(str(response.text))
@@ -177,12 +175,10 @@ def get_frob ():
         raise Exception('Failed to retrieve frob')
 
 def get_orphaned_photos (auth):
-    url = get_sig_url('%s?method=flickr.photos.getNotInSet&user_id=%s&auth_token=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token')))
+    url = get_sig_url('%s?method=flickr.photos.getNotInSet' % URL.get('rest'), auth)
 
 def get_photo (auth, id):
-    url = get_sig_url('%s?method=flickr.photos.getSizes&user_id=%s&auth_token=%s&photo_id=%s' \
-            % (URL.get('rest'), auth.get('user'), auth.get('token'), id))
+    url = get_sig_url('%s?method=flickr.photos.getSizes&photo_id=%s' % (URL.get('rest'), id), auth)
     try:
         response = requests.get(url)
         contents = etree.fromstring(str(response.text))
@@ -195,8 +191,10 @@ def get_photo (auth, id):
     except:
         raise Exception('Failed to retrieve frob')
 
-def get_sig_url (url):
-    url += "&api_key=" + APIKEY
+def get_sig_url (url, auth={}):
+    url += '&api_key=' + APIKEY
+    if auth:
+        url += '&user_id=%s&auth_token=%s' % (auth.get('user'), auth.get('token'))
     params = sorted(url.split('?')[1].split('&'))
     params = ''.join([ p.replace('=', '') for p in params ])
     sign = hashlib.md5(SECRET + params).hexdigest()
