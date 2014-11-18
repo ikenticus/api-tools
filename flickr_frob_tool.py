@@ -1,3 +1,12 @@
+'''
+    Name:   flickr_frob_tool
+    Author: ikenticus
+    Date:   2014/11/14
+    Notes:  Attempted to script flickr upload/download tool using frob
+            which worked for download but not for the upload because
+            flickr switched to oauth to replace the frob method
+'''
+
 import os
 import sys
 import cPickle
@@ -10,6 +19,7 @@ from datetime import datetime
 
 from flickr_keys import *
 
+DUMMYJPG = '1x1.jpg'
 FROBFILE = 'flickr.frob.cache'
 ROOTDIR = 'photos'  # default photo dir
 PERPAGE = 100       # photos per album page
@@ -197,6 +207,7 @@ def get_sig_url (url, auth={}):
         url += '&user_id=%s&auth_token=%s' % (auth.get('user'), auth.get('token'))
     params = sorted(url.split('?')[1].split('&'))
     params = ''.join([ p.replace('=', '') for p in params ])
+    print params
     sign = hashlib.md5(SECRET + params).hexdigest()
     return url + "&api_sig=" + sign
     
@@ -250,6 +261,19 @@ def upload_directories (auth, online, rootdir):
             # reorder album chronologically
     pprint(online)
 
+def upload_dummy_photo (auth):
+    url = get_sig_url('%s?is_public=0&is_friend=1&is_family=1' % URL.get('upload'), auth)
+    try:
+        files = {'photo': open(DUMMYJPG, 'rb')}
+        print url
+        response = requests.post(url, files=files)
+        print response.text
+        #contents = etree.fromstring(str(response.text))
+        #cdict[title] = { 'id': contents.xpath('photoset/@id')[0] }
+        #return cdict
+    except:
+        raise Exception('Failed to upload dummy photo')
+
 def usage():
     print """Usage: %s action [rootdir:photos]
 
@@ -277,6 +301,9 @@ if __name__ == '__main__':
         cache = open(FROBFILE, 'w')
         cPickle.dump(auth, cache)
         cache.close()
+
+    upload_dummy_photo(auth)
+    sys.exit(1)
 
     try:
         action = sys.argv[1]
