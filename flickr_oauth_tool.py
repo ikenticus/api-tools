@@ -3,7 +3,12 @@
     Author: ikenticus
     Date:   2014/11/18
     Notes:  Using flickr oauth to upload/download photo collection
-            maintaining local directory structure
+            maintaining local directory structure based on:
+            * https://www.flickr.com/services/api/auth.oauth.html
+
+            Referenced these documents for some additional direction:
+            * http://mkelsey.com/2011/07/03/Flickr-oAuth-Python-Example/
+            * http://snakeycode.wordpress.com/2013/05/01/troubles-with-the-flickr-api/
 '''
 
 import os
@@ -20,6 +25,10 @@ from datetime import datetime
 from flickr_keys import *
 
 CACHEFILE = 'flickr.oauth.cache'
+DUMMYJPG = '1x1.jpg'
+ROOTDIR = 'photos'  # default photo dir
+PERPAGE = 100       # photos per album page
+PARENT = ' : '      # parent prefix
 URL = {
     'auth': 'https://api.flickr.com/services/auth/',
     'rest': 'https://api.flickr.com/services/rest/',
@@ -37,17 +46,19 @@ def oauth_authorize (auth, perms):
     webbrowser.open_new(url)
     return sys.stdin.readline().rstrip()
 
-def oauth_get_token (auth={}, url=None):
+def oauth_request (method='GET', action=True, auth={}, url=None):
     token = None
+    consumer = oauth2.Consumer(key=APIKEY,secret=SECRET)
     params = {
         'oauth_version': "1.0",
         'oauth_nonce': oauth2.generate_nonce(),
         'oauth_timestamp': int(time.time()),
+        'oauth_consumer_key': consumer.key,
     }
 
     if auth:
-        params['oauth_token'] = auth.get('oauth_token')
-        token = oauth2.Token(auth['oauth_token'], auth['oauth_token_secret'])
+        token = oauth2.Token(auth.get('oauth_token'), auth.get('oauth_token_secret'))
+        params['oauth_token'] = token.key
         if auth.get('oauth_verifier'):
             params['oauth_verifier']  = auth.get('oauth_verifier')
             token.set_verifier(auth.get('oauth_verifier'))
@@ -57,12 +68,13 @@ def oauth_get_token (auth={}, url=None):
         params['oauth_callback'] = URL.get('callback')
 
     if url:
-        consumer = oauth2.Consumer(key=APIKEY,secret=SECRET)
-        params['oauth_consumer_key'] = consumer.key
-        request = oauth2.Request(method='GET', url=url, parameters=params)
+        request = oauth2.Request(method=method, url=url, parameters=params)
         request.sign_request(oauth2.SignatureMethod_HMAC_SHA1(), consumer, token)
-        response = requests.get(request.to_url())
-        return split_url_to_dict(response.text)
+        if action:
+            response = requests.get(request.to_url())
+            return response.text
+        else:
+            return request
     else:
         return
 
@@ -72,6 +84,15 @@ def split_url_to_dict (query):
         kv = param.split('=')
         udict[kv[0]] = kv[1]
     return udict
+
+def upload_dummy_photo (auth):
+    #url = '%s?photo=%s' % (URL.get('upload'), DUMMYJPG)
+    url = URL.get('upload')
+    files = {'photo': open(DUMMYJPG, 'rb')}
+    request = oauth_request(action=False, auth=auth, method='POST', url=url)
+    response = requests.post(url, data=request, files=files)
+    print response.status_code
+    print response.text
 
 
 if __name__ == '__main__':
@@ -85,14 +106,15 @@ if __name__ == '__main__':
         auth = cPickle.load(cache)
         cache.close()
     except:
-        auth = oauth_get_token()
+        auth = split_url_to_dict(oauth_request())
         auth['oauth_verifier'] = oauth_authorize(auth, 'write')
-        auth = oauth_get_token(auth) 
+
+        auth = split_url_to_dict(oauth_request(auth=auth))
         auth['date'] = today
+
         cache = open(CACHEFILE, 'w')
         cPickle.dump(auth, cache)
         cache.close()
 
-    print auth
-#http://mkelsey.com/2011/07/03/Flickr-oAuth-Python-Example/
-#http://snakeycode.wordpress.com/2013/05/01/troubles-with-the-flickr-api/
+    upload_dummy_photo(auth)
+

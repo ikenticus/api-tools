@@ -4,7 +4,8 @@
     Date:   2014/11/14
     Notes:  Attempted to script flickr upload/download tool using frob
             which worked for download but not for the upload because
-            flickr switched to oauth to replace the frob method
+            flickr switched to oauth but did not update the API docs:
+            * https://www.flickr.com/services/api/
 '''
 
 import os
@@ -303,7 +304,6 @@ if __name__ == '__main__':
         cache.close()
 
     upload_dummy_photo(auth)
-    sys.exit(1)
 
     try:
         action = sys.argv[1]
