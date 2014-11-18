@@ -20,7 +20,7 @@ from datetime import datetime
 
 from flickr_keys import *
 
-DUMMYJPG = '1x1.jpg'
+DUMMYIMG = 'dummy.jpg'
 FROBFILE = 'flickr.frob.cache'
 ROOTDIR = 'photos'  # default photo dir
 PERPAGE = 100       # photos per album page
@@ -265,7 +265,7 @@ def upload_directories (auth, online, rootdir):
 def upload_dummy_photo (auth):
     url = get_sig_url('%s?is_public=0&is_friend=1&is_family=1' % URL.get('upload'), auth)
     try:
-        files = {'photo': open(DUMMYJPG, 'rb')}
+        files = {'photo': open(DUMMYIMG, 'rb')}
         print url
         response = requests.post(url, files=files)
         print response.text

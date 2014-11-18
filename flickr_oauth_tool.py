@@ -19,13 +19,14 @@ import oauth2
 import cPickle
 import requests
 import webbrowser
+from lxml import etree
 from pprint import pprint
 from datetime import datetime
 
 from flickr_keys import *
 
 CACHEFILE = 'flickr.oauth.cache'
-DUMMYJPG = '1x1.jpg'
+DUMMYIMG = 'dummy.jpg'
 ROOTDIR = 'photos'  # default photo dir
 PERPAGE = 100       # photos per album page
 PARENT = ' : '      # parent prefix
@@ -34,7 +35,7 @@ URL = {
     'rest': 'https://api.flickr.com/services/rest/',
     'upload': 'https://up.flickr.com/services/upload/',
     'oauth': 'http://www.flickr.com/services/oauth/',
-    'callback': 'http://www.usatoday.com/',
+    'callback': 'http://www.flickr.com/',
 }
 
 def oauth_access_token ():
@@ -78,6 +79,12 @@ def oauth_request (method='GET', action=True, auth={}, url=None):
     else:
         return
 
+def search_photos (auth):
+    url = '%s?method=flickr.photos.search' % URL.get('rest')
+    request = oauth_request(action=False, auth=auth, method='POST', url=url)
+    response = requests.post(url, data=request, headers=headers, files=files)
+    contents = etree.fromstring(str(response.text))
+
 def split_url_to_dict (query):
     udict = {}
     for param in query.split('&'):
@@ -86,13 +93,12 @@ def split_url_to_dict (query):
     return udict
 
 def upload_dummy_photo (auth):
-    #url = '%s?photo=%s' % (URL.get('upload'), DUMMYJPG)
     url = URL.get('upload')
-    files = {'photo': open(DUMMYJPG, 'rb')}
+    files = {'photo': open(DUMMYIMG, 'rb')}
     request = oauth_request(action=False, auth=auth, method='POST', url=url)
     response = requests.post(url, data=request, files=files)
-    print response.status_code
-    print response.text
+    contents = etree.fromstring(str(response.text))
+    return contents.xpath('photoid/text()')[0]
 
 
 if __name__ == '__main__':
@@ -110,11 +116,13 @@ if __name__ == '__main__':
         auth['oauth_verifier'] = oauth_authorize(auth, 'write')
 
         auth = split_url_to_dict(oauth_request(auth=auth))
-        auth['date'] = today
+        auth.update({
+            'date': today,
+            'dummy': str(upload_dummy_photo(auth)),
+        })
 
         cache = open(CACHEFILE, 'w')
         cPickle.dump(auth, cache)
         cache.close()
 
-    upload_dummy_photo(auth)
-
+    print auth
