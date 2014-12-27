@@ -27,7 +27,7 @@ from datetime import datetime
 
 from flickr_keys import *
 
-MAXRETRIES = 10
+MAXRETRIES = 50
 CACHEFILE = 'flickr.oauth.cache'
 DUMMYIMG = 'dummy.jpg'
 ROOTDIR = 'photos'  # default photo dir
@@ -326,56 +326,11 @@ def upload_directories (auth, online, rootdir):
                     online = create_collection(auth, online, dname, 0)
             elif dname.startswith(os.path.basename(root)):
                 online = create_sub_collection(auth, online, croot, dname)
-                '''
-                sub = online.get(croot)
-                if not sub.get('collection'):
-                    sub['collection'] = {}
-                if not sub.get('collection').get(dname):
-                    sub['collection'] = create_collection (auth, sub['collection'], dname, sub.get('id'))
-                '''
             else:
                 online = upload_collection_album(auth, online, croot, dname)
-                '''
-                # add dummy photo to create new album
-                album = re.sub('^:', '', '%s:%s' % (':'.join(croot.split('/')[2:]), dname))
-                parent = croot.split('/')[:2]
-                parent.insert(1, 'collection')
-                sub = get_nested(online, *parent)
-                if not sub.get('album'):
-                    sub['album'] = {}
-                if not sub.get('album').get(album):
-                    sub['album'] = create_album(auth, sub['album'], album)
-                    edit_collection_albums(auth, sub)
-                photoset = sub['album'][album]
-                photoset['photos'] = [ x.get('title') for x in get_album_photos(auth, photoset.get('id')) ]
-                '''
         for fname in fnames:
             filename = '%s/%s' % (root, fname)
             online = upload_album_photos(auth, online, croot, filename)
-            '''
-            title = fname.split('.')[0]
-            parent = croot.split('/')[:2]
-            parent.insert(1, 'collection')
-            parent.extend(['album', ':'.join(croot.split('/')[2:])])
-            album = get_nested(online, *parent)
-            photos = album.get('photos')
-            album = album.get('id')
-            if title in photos:
-                print title + ' already uploaded'
-            else:
-                photo = upload_photo(auth, '%s/%s' % (root, fname))
-                try:
-                    add_album_photo(auth, album, photo)
-                except:
-                    sys.stderr.write('Failed to add photo %s to album %s\n' % (photo, album))
-                    try:
-                        delete_photo(auth, photo)
-                    except:
-                        sys.stderr.write('Failed to delete photo: %s\n' % photo)
-            if 'dummy' in photos:
-                remove_album_photo(auth, album, auth.get('dummy'))
-            # reorder album chronologically
-            '''
     sys.stdout.write('Upload complete\n%s\n' % '=' * 75)
     pprint(online)
 
@@ -388,14 +343,16 @@ def upload_album_photos (auth, tree, root, name):
     photos = album.get('photos')
     album = album.get('id')
     if title in photos:
-        print title + ' already uploaded'
+        sys.stderr.write('Album %s already contains photo: %s\n' % (album, title))
     else:
         photo = upload_photo(auth, name)
+        time.sleep(1)
         try:
             add_album_photo(auth, album, photo)
         except:
             delete_photo(auth, photo)
     if 'dummy' in photos:
+        time.sleep(1)
         remove_album_photo(auth, album, auth.get('dummy'))
     return tree
 
