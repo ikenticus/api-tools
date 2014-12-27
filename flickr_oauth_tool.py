@@ -12,6 +12,7 @@
 '''
 
 import os
+import re
 import sys
 import json
 import time
@@ -44,19 +45,41 @@ def action_download (auth, args):
     download_collections (auth, get_collections(auth), rootdir)
 
 def action_upload (auth, args):
-    print 'UPLOAD'
-    return
     rootdir = args[0] if len(args) > 0 else ROOTDIR
     online = get_collections(auth)
-    # check dummy photo
     upload_directories (auth, online, rootdir)
 
 def action_view (auth, args):
     pprint(get_collections(auth))
 
+def add_album_photo (auth, album, photo):
+    url = '%s?method=flickr.photosets.addPhoto&photoset_id=%s&photo_id=%s' \
+            % (URL.get('rest'), album, photo)
+    contents = flickr_request(auth, url)
+    return
+
 def check_oauth_token (auth):
     url = '%s?method=flickr.auth.oauth.checkToken' % URL.get('rest')
     flickr_request(auth, url)
+
+def check_make_dir (path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+def create_album (auth, cdict, title):
+    url = '%s?method=flickr.photosets.create&title=%s&primary_photo_id=%s' \
+            % (URL.get('rest'), title, auth.get('dummy'))
+    contents = flickr_request(auth, url)
+    print contents.xpath('photoset/@id')[0]
+    cdict[title] = { 'id': contents.xpath('photoset/@id')[0] }
+    return cdict
+
+def create_collection (auth, cdict, title, parent):
+    url = '%s?method=flickr.collections.create&title=%s&parent_id=%s' \
+            % (URL.get('rest'), title, parent)
+    contents = flickr_request(auth, url)
+    cdict[title] = { 'id': contents.xpath('collection/@id')[0] }
+    return cdict
 
 def download_album (auth, id, rootdir):
     photos = get_album_photos(auth, id)
@@ -70,16 +93,14 @@ def download_album (auth, id, rootdir):
 def download_albums (auth, albums, rootdir):
     for album in albums.keys():
         photodir = rootdir + '/' + album
-        if not os.path.exists(photodir):
-            os.makedirs(photodir)
+        check_make_dir(photodir)
         id = albums.get(album).get('id')
         download_album(auth, id, photodir)
 
 def download_collections (auth, collections, rootdir):
     for collection in collections.keys():
         photodir = rootdir + '/' + collection
-        if not os.path.exists(photodir):
-            os.makedirs(photodir)
+        check_make_dir(photodir)
         sub = collections.get(collection)
         if sub.get('collection'):
             download_collections(auth, sub.get('collection'), photodir)
@@ -99,9 +120,23 @@ def download_photo (auth, id, filename):
         sys.stdout.write('Failed to get %s: %s\n' % (photo.get('label'), filename))
         raise Exception('Failed to download photo')
 
+def edit_collection_albums (auth, tree):
+    albums = tree.get('album')
+    photosets = ','.join([ albums.get(x).get('id') for x in albums.keys() ])
+    collection = tree.get('id')
+    url = '%s?method=flickr.collections.editSets&collection_id=%s&photoset_ids=%s' \
+            % (URL.get('rest'), collection, photosets)
+    contents = flickr_request(auth, url)
+    return
+
 def flickr_request (auth, url):
+    params = url.split('&')[1:]
+    try:
+        title = [ x for x in params if x.startswith('title=') ][0].split('=')[1]
+    except:
+        title = ','.join([ x for x in params if '_id=' in x ])
     caller = inspect.getouterframes(inspect.currentframe(), 2)[1][3].replace('_', ' ')
-    sys.stdout.write('Attempting to %s\n' % caller)
+    sys.stdout.write('Attempting to %s %s\n' % (caller, title))
     try:
         url += '&api_key=%s' % APIKEY
         request = oauth_request(action=False, auth=auth, method='GET', url=url)
@@ -140,6 +175,32 @@ def get_collections (auth):
     url = '%s?method=flickr.collections.getTree' % URL.get('rest')
     contents = flickr_request(auth, url)
     return loop_collection(contents.xpath('collections/collection'))
+
+def get_nested(dct, *keys, **kwargs):
+    current = dct
+    default = kwargs.get("default")
+    used = []
+
+    for key in keys:
+        if isinstance(current, dict):
+            try:
+                current = current[key]
+            except KeyError:
+                return default
+        elif isinstance(current, list):
+            try:
+                current = current[key]
+            except IndexError:
+                return default
+        elif current is None:
+            return default
+        else:
+            raise ValueError('The value %r at %r is not a dict or list'
+                             % (current, '.'.join(used)))
+        if current is None:
+            return default
+        used.append(key)
+    return current
 
 def get_orphaned_photos (auth):
     url = '%s?method=flickr.photos.getNotInSet' % URL.get('rest')
@@ -207,6 +268,18 @@ def oauth_request (method='GET', action=True, auth={}, url=None):
     else:
         return
 
+def remove_album_photo (auth, album, photo):
+    url = '%s?method=flickr.photosets.removePhoto&photoset_id=%s&photo_id=%s' \
+            % (URL.get('rest'), album, photo)
+    contents = flickr_request(auth, url)
+    return
+
+def remove_collection_album (auth, collection, album):
+    url = '%s?method=flickr.collections.removeSet&collection_id=%s&photoset_id=%s' \
+            % (URL.get('rest'), collection, album)
+    contents = flickr_request(auth, url)
+    return
+
 def search_photos (auth):
     url = '%s?method=flickr.photos.search' % URL.get('rest')
     request = oauth_request(action=False, auth=auth, method='POST', url=url)
@@ -220,9 +293,54 @@ def split_url_to_dict (query):
         udict[kv[0]] = kv[1]
     return udict
 
+def upload_directories (auth, online, rootdir):
+    last_album = ''
+    for root, dnames, fnames in os.walk(rootdir):
+        croot = root.replace(rootdir + '/', '')
+        for dname in dnames:
+            if root == rootdir:
+                if not online.get(dname):
+                    online = create_collection(auth, online, dname, 0)
+            elif dname.startswith(os.path.basename(root)):
+                sub = online.get(croot)
+                if not sub.get('collection'):
+                    sub['collection'] = {}
+                if not sub.get('collection').get(dname):
+                    sub['collection'] = create_collection (auth, sub['collection'], dname, sub.get('id'))
+            else:
+                # add dummy photo to create new album
+                album = re.sub('^:', '', '%s:%s' % (':'.join(croot.split('/')[2:]), dname))
+                parent = croot.split('/')[:2]
+                parent.insert(1, 'collection')
+                sub = get_nested(online, *parent)
+                if not sub.get('album'):
+                    sub['album'] = {}
+                if not sub.get('album').get(album):
+                    sub['album'] = create_album(auth, sub['album'], album)
+                    edit_collection_albums(auth, sub)
+        for fname in fnames:
+            parent = croot.split('/')[:2]
+            parent.insert(1, 'collection')
+            parent.extend(['album', ':'.join(croot.split('/')[2:]), 'id'])
+            album = get_nested(online, *parent)
+            photo = upload_photo(auth, '%s/%s' % (root, fname))
+            add_album_photo(auth, album, photo)
+            # after uploading photos to album, remove dummy photo
+            if album != last_album:
+                try:
+                    remove_album_photo(auth, album, auth.get('dummy'))
+                except:
+                    sys.stderr.write('Dummy photo removal failed, probably already removed\n')
+            last_album = album
+            # reorder album chronologically
+    pprint(online)
+
 def upload_dummy_photo (auth):
+    return upload_photo(auth, DUMMYIMG)
+
+def upload_photo (auth, filepath):
     url = URL.get('upload')
-    files = {'photo': open(DUMMYIMG, 'rb')}
+    files = {'photo': open(filepath, 'rb')}
     request = oauth_request(action=False, auth=auth, method='POST', url=url)
     response = requests.post(url, data=request, files=files)
     contents = etree.fromstring(str(response.text))
@@ -242,8 +360,8 @@ def usage():
 if __name__ == '__main__':
     today = str(datetime.now().strftime('%D %r'))
 
-    #if len(sys.argv) < 2:
-    #    usage()
+    if len(sys.argv) < 2:
+        usage()
 
     try:
         cache = open(CACHEFILE, 'r')
@@ -267,7 +385,6 @@ if __name__ == '__main__':
                 for a in dir(sys.modules[__name__])
                 if a.startswith('action_') }
 
-    print auth
     try:
         action = sys.argv[1]
         ACTIONS[action](auth, sys.argv[2:])

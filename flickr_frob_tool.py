@@ -255,7 +255,7 @@ def upload_directories (auth, online, rootdir):
             else:
                 print '\n-- Create album'
                 # add dummy photo to create new album
-                print croot.split('/'), dname
+                print '%s:%s' % (':'.join(croot.split('/'), dname)
         for fname in fnames:
             print '%s/%s' % (root, fname)
             # after uploading photos to album, remove dummy photo
