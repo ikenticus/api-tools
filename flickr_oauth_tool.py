@@ -27,6 +27,7 @@ from datetime import datetime
 
 from flickr_keys import *
 
+MAXRETRIES = 10
 CACHEFILE = 'flickr.oauth.cache'
 DUMMYIMG = 'dummy.jpg'
 ROOTDIR = 'photos'  # default photo dir
@@ -55,8 +56,7 @@ def action_view (auth, args):
 def add_album_photo (auth, album, photo):
     url = '%s?method=flickr.photosets.addPhoto&photoset_id=%s&photo_id=%s' \
             % (URL.get('rest'), album, photo)
-    contents = flickr_request(auth, url)
-    return
+    return flickr_request(auth, url)
 
 def check_oauth_token (auth):
     url = '%s?method=flickr.auth.oauth.checkToken' % URL.get('rest')
@@ -70,7 +70,6 @@ def create_album (auth, cdict, title):
     url = '%s?method=flickr.photosets.create&title=%s&primary_photo_id=%s' \
             % (URL.get('rest'), title, auth.get('dummy'))
     contents = flickr_request(auth, url)
-    print contents.xpath('photoset/@id')[0]
     cdict[title] = { 'id': contents.xpath('photoset/@id')[0] }
     return cdict
 
@@ -80,6 +79,19 @@ def create_collection (auth, cdict, title, parent):
     contents = flickr_request(auth, url)
     cdict[title] = { 'id': contents.xpath('collection/@id')[0] }
     return cdict
+
+def create_sub_collection (auth, tree, root, name):
+    sub = tree.get(root)
+    if not sub.get('collection'):
+        sub['collection'] = {}
+    if not sub.get('collection').get(name):
+        sub['collection'] = create_collection (auth, sub['collection'], name, sub.get('id'))
+    return tree
+
+def delete_photo (auth, photo):
+    url = '%s?method=flickr.photos.delete&photo_id=%s' \
+            % (URL.get('rest'), photo)
+    return flickr_request(auth, url)
 
 def download_album (auth, id, rootdir):
     photos = get_album_photos(auth, id)
@@ -126,8 +138,7 @@ def edit_collection_albums (auth, tree):
     collection = tree.get('id')
     url = '%s?method=flickr.collections.editSets&collection_id=%s&photoset_ids=%s' \
             % (URL.get('rest'), collection, photosets)
-    contents = flickr_request(auth, url)
-    return
+    return flickr_request(auth, url)
 
 def flickr_request (auth, url):
     params = url.split('&')[1:]
@@ -271,14 +282,12 @@ def oauth_request (method='GET', action=True, auth={}, url=None):
 def remove_album_photo (auth, album, photo):
     url = '%s?method=flickr.photosets.removePhoto&photoset_id=%s&photo_id=%s' \
             % (URL.get('rest'), album, photo)
-    contents = flickr_request(auth, url)
-    return
+    return flickr_request(auth, url)
 
 def remove_collection_album (auth, collection, album):
     url = '%s?method=flickr.collections.removeSet&collection_id=%s&photoset_id=%s' \
             % (URL.get('rest'), collection, album)
-    contents = flickr_request(auth, url)
-    return
+    return flickr_request(auth, url)
 
 def search_photos (auth):
     url = '%s?method=flickr.photos.search' % URL.get('rest')
@@ -293,21 +302,40 @@ def split_url_to_dict (query):
         udict[kv[0]] = kv[1]
     return udict
 
+def upload_collection_album (auth, tree, root, name):
+    # add dummy photo to create new album
+    album = re.sub('^:', '', '%s:%s' % (':'.join(root.split('/')[2:]), name))
+    parent = root.split('/')[:2]
+    parent.insert(1, 'collection')
+    sub = get_nested(tree, *parent)
+    if not sub.get('album'):
+        sub['album'] = {}
+    if not sub.get('album').get(album):
+        sub['album'] = create_album(auth, sub['album'], album)
+        edit_collection_albums(auth, sub)
+    photoset = sub['album'][album]
+    photoset['photos'] = [ x.get('title') for x in get_album_photos(auth, photoset.get('id')) ]
+    return tree
+
 def upload_directories (auth, online, rootdir):
-    last_album = ''
-    for root, dnames, fnames in os.walk(rootdir):
+    for root, dnames, fnames in os.walk(rootdir, followlinks=True):
         croot = root.replace(rootdir + '/', '')
         for dname in dnames:
             if root == rootdir:
                 if not online.get(dname):
                     online = create_collection(auth, online, dname, 0)
             elif dname.startswith(os.path.basename(root)):
+                online = create_sub_collection(auth, online, croot, dname)
+                '''
                 sub = online.get(croot)
                 if not sub.get('collection'):
                     sub['collection'] = {}
                 if not sub.get('collection').get(dname):
                     sub['collection'] = create_collection (auth, sub['collection'], dname, sub.get('id'))
+                '''
             else:
+                online = upload_collection_album(auth, online, croot, dname)
+                '''
                 # add dummy photo to create new album
                 album = re.sub('^:', '', '%s:%s' % (':'.join(croot.split('/')[2:]), dname))
                 parent = croot.split('/')[:2]
@@ -318,22 +346,58 @@ def upload_directories (auth, online, rootdir):
                 if not sub.get('album').get(album):
                     sub['album'] = create_album(auth, sub['album'], album)
                     edit_collection_albums(auth, sub)
+                photoset = sub['album'][album]
+                photoset['photos'] = [ x.get('title') for x in get_album_photos(auth, photoset.get('id')) ]
+                '''
         for fname in fnames:
+            filename = '%s/%s' % (root, fname)
+            online = upload_album_photos(auth, online, croot, filename)
+            '''
+            title = fname.split('.')[0]
             parent = croot.split('/')[:2]
             parent.insert(1, 'collection')
-            parent.extend(['album', ':'.join(croot.split('/')[2:]), 'id'])
+            parent.extend(['album', ':'.join(croot.split('/')[2:])])
             album = get_nested(online, *parent)
-            photo = upload_photo(auth, '%s/%s' % (root, fname))
-            add_album_photo(auth, album, photo)
-            # after uploading photos to album, remove dummy photo
-            if album != last_album:
+            photos = album.get('photos')
+            album = album.get('id')
+            if title in photos:
+                print title + ' already uploaded'
+            else:
+                photo = upload_photo(auth, '%s/%s' % (root, fname))
                 try:
-                    remove_album_photo(auth, album, auth.get('dummy'))
+                    add_album_photo(auth, album, photo)
                 except:
-                    sys.stderr.write('Dummy photo removal failed, probably already removed\n')
-            last_album = album
+                    sys.stderr.write('Failed to add photo %s to album %s\n' % (photo, album))
+                    try:
+                        delete_photo(auth, photo)
+                    except:
+                        sys.stderr.write('Failed to delete photo: %s\n' % photo)
+            if 'dummy' in photos:
+                remove_album_photo(auth, album, auth.get('dummy'))
             # reorder album chronologically
+            '''
+    sys.stdout.write('Upload complete\n%s\n' % '=' * 75)
     pprint(online)
+
+def upload_album_photos (auth, tree, root, name):
+    title = name.split('/')[-1].split('.')[0]
+    parent = root.split('/')[:2]
+    parent.insert(1, 'collection')
+    parent.extend(['album', ':'.join(root.split('/')[2:])])
+    album = get_nested(tree, *parent)
+    photos = album.get('photos')
+    album = album.get('id')
+    if title in photos:
+        print title + ' already uploaded'
+    else:
+        photo = upload_photo(auth, name)
+        try:
+            add_album_photo(auth, album, photo)
+        except:
+            delete_photo(auth, photo)
+    if 'dummy' in photos:
+        remove_album_photo(auth, album, auth.get('dummy'))
+    return tree
 
 def upload_dummy_photo (auth):
     return upload_photo(auth, DUMMYIMG)
@@ -385,8 +449,16 @@ if __name__ == '__main__':
                 for a in dir(sys.modules[__name__])
                 if a.startswith('action_') }
 
-    try:
-        action = sys.argv[1]
-        ACTIONS[action](auth, sys.argv[2:])
-    except:
-        usage()
+    counter = 1
+    complete = False
+    while not complete and counter < MAXRETRIES:
+        try:
+            action = sys.argv[1]
+            ACTIONS[action](auth, sys.argv[2:])
+            complete = True
+        except IOError as e:
+            sys.stderr.write('''Failed to complete upload: %s
+%s
+Retrying %d\n''' % (e, '-' * 75, counter))
+        counter = counter + 1
+
