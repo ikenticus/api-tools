@@ -9,6 +9,8 @@
             Referenced these documents for some additional direction:
             * http://mkelsey.com/2011/07/03/Flickr-oAuth-Python-Example/
             * http://snakeycode.wordpress.com/2013/05/01/troubles-with-the-flickr-api/
+
+            Seems that flickr API constantly times out, need to retry everything
 '''
 
 import os
@@ -129,7 +131,7 @@ def download_photo (auth, id, filename):
                     file.write(chunk)
         sys.stdout.write('Downloaded %s: %s\n' % (photo.get('label'), filename))
     except:
-        sys.stdout.write('Failed to get %s: %s\n' % (photo.get('label'), filename))
+        sys.stderr.write('Failed to get %s: %s\n' % (photo.get('label'), filename))
         raise Exception('Failed to download photo')
 
 def edit_collection_albums (auth, tree):
@@ -146,16 +148,25 @@ def flickr_request (auth, url):
         title = [ x for x in params if x.startswith('title=') ][0].split('=')[1]
     except:
         title = ','.join([ x for x in params if '_id=' in x ])
+    if title.endswith(auth.get('dummy')):
+        title = 'dummy'
     caller = inspect.getouterframes(inspect.currentframe(), 2)[1][3].replace('_', ' ')
     sys.stdout.write('Attempting to %s %s\n' % (caller, title))
-    try:
-        url += '&api_key=%s' % APIKEY
-        request = oauth_request(action=False, auth=auth, method='GET', url=url)
-        url += '&' + '&'.join([ '%s=%s' % (x, request[x]) for x in request.keys() ])
-        response = requests.get(url, data=request)
-        return etree.fromstring(str(response.text))
-    except:
-        raise Exception('Failed to %s' % caller)
+    url += '&api_key=%s' % APIKEY
+    attempt = 1
+    complete = False
+    while not complete and attempt < MAXRETRIES:
+        try:
+            request = oauth_request(action=False, auth=auth, method='GET', url=url)
+            nurl = '%s&%s' % (url, '&'.join([ '%s=%s' % (x, request[x]) for x in request.keys() ]))
+            response = requests.get(nurl, data=request)
+            if response.status_code == 200:
+                return etree.fromstring(str(response.text))
+                complete = True
+        except IOError as e:
+            sys.stderr.write('...failed to %s attempt %d: %s\n' % (caller, attempt, e))
+        attempt = attempt + 1
+    raise Exception('Failed to %s after %d attempts' % (caller, MAXRETRIES))
 
 def get_album_photos (auth, albumid, perpage=PERPAGE, page=1, photos=[]):
     url = '%s?method=flickr.photosets.getPhotos&photoset_id=%s&page=%s&per_page=%s' \
@@ -295,6 +306,11 @@ def search_photos (auth):
     response = requests.post(url, data=request, headers=headers, files=files)
     contents = etree.fromstring(str(response.text))
 
+def set_album_photo (auth, album, photo):
+    url = '%s?method=flickr.photosets.setPrimaryPhoto&photoset_id=%s&photo_id=%s' \
+            % (URL.get('rest'), album, photo)
+    return flickr_request(auth, url)
+
 def split_url_to_dict (query):
     udict = {}
     for param in query.split('&'):
@@ -319,8 +335,12 @@ def upload_collection_album (auth, tree, root, name):
 
 def upload_directories (auth, online, rootdir):
     for root, dnames, fnames in os.walk(rootdir, followlinks=True):
+        if root.endswith('offline'):
+            continue
         croot = root.replace(rootdir + '/', '')
         for dname in dnames:
+            if dname.endswith('offline'):
+                continue
             if root == rootdir:
                 if not online.get(dname):
                     online = create_collection(auth, online, dname, 0)
@@ -328,31 +348,33 @@ def upload_directories (auth, online, rootdir):
                 online = create_sub_collection(auth, online, croot, dname)
             else:
                 online = upload_collection_album(auth, online, croot, dname)
-        for fname in fnames:
-            filename = '%s/%s' % (root, fname)
-            online = upload_album_photos(auth, online, croot, filename)
+        if fnames:
+            online = upload_album_photos(auth, online, croot, root, fnames)
     sys.stdout.write('Upload complete\n%s\n' % '=' * 75)
     pprint(online)
 
-def upload_album_photos (auth, tree, root, name):
-    title = name.split('/')[-1].split('.')[0]
+def upload_album_photos (auth, tree, root, dir, files):
     parent = root.split('/')[:2]
     parent.insert(1, 'collection')
     parent.extend(['album', ':'.join(root.split('/')[2:])])
-    album = get_nested(tree, *parent)
-    photos = album.get('photos')
-    album = album.get('id')
-    if title in photos:
-        sys.stderr.write('Album %s already contains photo: %s\n' % (album, title))
-    else:
-        photo = upload_photo(auth, name)
-        time.sleep(1)
-        try:
-            add_album_photo(auth, album, photo)
-        except:
-            delete_photo(auth, photo)
+    photoset = get_nested(tree, *parent)
+    photos = photoset.get('photos')
+    album = photoset.get('id')
+    photo = None
+    for file in files:
+        name = '%s/%s' % (dir, file)
+        title = name.split('/')[-1].split('.')[0]
+        if title in photos:
+            sys.stderr.write('Album %s (%s) already contains photo: %s\n' % (album, root.split('/')[-1], title))
+        else:
+            photo = upload_photo(auth, name)
+            try:
+                add_album_photo(auth, album, photo)
+            except:
+                delete_photo(auth, photo)
+    if photo:
+        set_album_photo(auth, album, photo)
     if 'dummy' in photos:
-        time.sleep(1)
         remove_album_photo(auth, album, auth.get('dummy'))
     return tree
 
@@ -362,10 +384,20 @@ def upload_dummy_photo (auth):
 def upload_photo (auth, filepath):
     url = URL.get('upload')
     files = {'photo': open(filepath, 'rb')}
-    request = oauth_request(action=False, auth=auth, method='POST', url=url)
-    response = requests.post(url, data=request, files=files)
-    contents = etree.fromstring(str(response.text))
-    return contents.xpath('photoid/text()')[0]
+    attempt = 1
+    complete = False
+    while not complete and attempt < MAXRETRIES:
+        try:
+            request = oauth_request(action=False, auth=auth, method='POST', url=url)
+            response = requests.post(url, data=request, files=files)
+            if response.status_code == 200:
+                contents = etree.fromstring(str(response.text))
+                return contents.xpath('photoid/text()')[0]
+                complete = True
+        except IOError as e:
+            sys.stderr.write('...failed to upload %s attempt %d: %s\n' % (filepath, attempt, e))
+        attempt = attempt + 1
+    raise Exception('Failed to upload %s after %d attempts' % (filepath, MAXRETRIES))
 
 def usage():
     print """Usage: %s action [rootdir:photos]
@@ -406,16 +438,9 @@ if __name__ == '__main__':
                 for a in dir(sys.modules[__name__])
                 if a.startswith('action_') }
 
-    counter = 1
-    complete = False
-    while not complete and counter < MAXRETRIES:
-        try:
-            action = sys.argv[1]
-            ACTIONS[action](auth, sys.argv[2:])
-            complete = True
-        except IOError as e:
-            sys.stderr.write('''Failed to complete upload: %s
-%s
-Retrying %d\n''' % (e, '-' * 75, counter))
-        counter = counter + 1
+    try:
+        action = sys.argv[1]
+        ACTIONS[action](auth, sys.argv[2:])
+    except IOError as e:
+        sys.stderr.write('Failed to complete upload: %s\n' % e)
 
