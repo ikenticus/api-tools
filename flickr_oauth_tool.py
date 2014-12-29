@@ -71,11 +71,13 @@ def check_make_dir (path):
 def cleanup_widow_albums (tree):
     sys.stdout.write('Removing widow albums that only contain dummy photo...\n')
     for year in tree.keys():
+        if year == 'album':
+            continue
         for month in tree.get(year).get('collection').keys():
             for album in tree.get(year).get('collection').get(month).get('album').keys():
                 photoset = tree.get(year).get('collection').get(month).get('album').get(album)
                 photos = photoset.get('photos')
-                if len(photos) == 1 and 'dummy' in photos:
+                if photos and len(photos) == 1 and 'dummy' in photos:
                     delete_album(auth, photoset.get('id'))
 
 def create_album (auth, cdict, title):
@@ -176,6 +178,7 @@ def flickr_request (auth, url):
             nurl = '%s&%s' % (url, '&'.join([ '%s=%s' % (x, request[x]) for x in request.keys() ]))
             response = requests.get(nurl, data=request)
             if response.status_code == 200:
+                #print response.text
                 return etree.fromstring(str(response.text))
                 complete = True
         except IOError as e:
@@ -211,7 +214,9 @@ def get_albums (auth):
 def get_collections (auth):
     url = '%s?method=flickr.collections.getTree' % URL.get('rest')
     contents = flickr_request(auth, url)
-    return loop_collection(contents.xpath('collections/collection'))
+    online = loop_collection(contents.xpath('collections/collection'))
+    online = get_orphaned_albums(auth, online)
+    return online
 
 def get_nested(dct, *keys, **kwargs):
     current = dct
@@ -238,6 +243,11 @@ def get_nested(dct, *keys, **kwargs):
             return default
         used.append(key)
     return current
+
+def get_orphaned_albums (auth, collections):
+    orphans = { x.get('title'): {'id': x.get('id')} for x in get_albums(auth) if '-' not in x.get('title') }
+    collections['album'] = orphans
+    return collections
 
 def get_orphaned_photos (auth):
     url = '%s?method=flickr.photos.getNotInSet' % URL.get('rest')
@@ -337,8 +347,12 @@ def upload_collection_album (auth, tree, root, name):
     # add dummy photo to create new album
     album = re.sub('^:', '', '%s:%s' % (':'.join(root.split('/')[2:]), name))
     parent = root.split('/')[:2]
-    parent.insert(1, 'collection')
-    sub = get_nested(tree, *parent)
+    if len(parent) == 1:
+        # root album not part of the yyyy/yyyymm collections
+        sub = tree
+    else:
+        parent.insert(1, 'collection')
+        sub = get_nested(tree, *parent)
     if not sub.get('album'):
         sub['album'] = {}
     if not sub.get('album').get(album):
@@ -356,7 +370,7 @@ def upload_directories (auth, online, rootdir):
         for dname in dnames:
             if dname.endswith('offline'):
                 continue
-            if root == rootdir:
+            if root == rootdir and dname.startswith('20'):
                 if not online.get(dname):
                     online = create_collection(auth, online, dname, 0)
             elif dname.startswith(os.path.basename(root)):
@@ -371,8 +385,11 @@ def upload_directories (auth, online, rootdir):
 
 def upload_album_photos (auth, tree, root, dir, files):
     parent = root.split('/')[:2]
-    parent.insert(1, 'collection')
-    parent.extend(['album', ':'.join(root.split('/')[2:])])
+    if len(parent) == 1:
+        parent.insert(0, 'album')
+    else:
+        parent.insert(1, 'collection')
+        parent.extend(['album', ':'.join(root.split('/')[2:])])
     photoset = get_nested(tree, *parent)
     photos = photoset.get('photos')
     album = photoset.get('id')
@@ -465,5 +482,5 @@ if __name__ == '__main__':
         action = sys.argv[1]
         ACTIONS[action](auth, sys.argv[2:])
     except:
-        sys.stderr.write('Failed to complete upload!\n')
+        sys.stderr.write('Failed to complete %s!\n' % action)
 
