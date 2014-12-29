@@ -68,6 +68,15 @@ def check_make_dir (path):
     if not os.path.exists(path):
         os.makedirs(path)
 
+def cleanup_widow_albums (tree):
+    for year in tree.keys():
+        for month in tree.get(year).get('collection').keys():
+            for album in tree.get(year).get('collection').get(month).get('album').keys():
+                photoset = tree.get(year).get('collection').get(month).get('album').get(album)
+                photos = photoset.get('photos')
+                if len(photos) == 1 and 'dummy' in photos:
+                    delete_album(auth, photoset.get('id'))
+
 def create_album (auth, cdict, title):
     url = '%s?method=flickr.photosets.create&title=%s&primary_photo_id=%s' \
             % (URL.get('rest'), title, auth.get('dummy'))
@@ -89,6 +98,11 @@ def create_sub_collection (auth, tree, root, name):
     if not sub.get('collection').get(name):
         sub['collection'] = create_collection (auth, sub['collection'], name, sub.get('id'))
     return tree
+
+def delete_album (auth, album):
+    url = '%s?method=flickr.photosets.delete&photoset_id=%s' \
+            % (URL.get('rest'), album)
+    return flickr_request(auth, url)
 
 def delete_photo (auth, photo):
     url = '%s?method=flickr.photos.delete&photo_id=%s' \
@@ -330,7 +344,7 @@ def upload_collection_album (auth, tree, root, name):
         sub['album'] = create_album(auth, sub['album'], album)
         edit_collection_albums(auth, sub)
     photoset = sub['album'][album]
-    photoset['photos'] = [ x.get('title') for x in get_album_photos(auth, photoset.get('id')) ]
+    photoset['photos'] = [ x.get('title') for x in get_album_photos(auth, photoset.get('id'), photos=[]) ]
     return tree
 
 def upload_directories (auth, online, rootdir):
@@ -350,8 +364,9 @@ def upload_directories (auth, online, rootdir):
                 online = upload_collection_album(auth, online, croot, dname)
         if fnames:
             online = upload_album_photos(auth, online, croot, root, fnames)
-    sys.stdout.write('Upload complete\n%s\n' % '=' * 75)
-    pprint(online)
+    sys.stdout.write('Upload complete\n%s\n' % ('=' * 75))
+    #pprint(online)
+    cleanup_widow_albums(online)
 
 def upload_album_photos (auth, tree, root, dir, files):
     parent = root.split('/')[:2]
@@ -383,18 +398,25 @@ def upload_dummy_photo (auth):
 
 def upload_photo (auth, filepath):
     url = URL.get('upload')
-    files = {'photo': open(filepath, 'rb')}
     attempt = 1
     complete = False
     while not complete and attempt < MAXRETRIES:
         try:
+            files = {'photo': open(filepath, 'rb')}
             request = oauth_request(action=False, auth=auth, method='POST', url=url)
             response = requests.post(url, data=request, files=files)
             if response.status_code == 200:
                 contents = etree.fromstring(str(response.text))
+                '''
+                if contents.xpath('err/@msg'):
+                    error = '%s (%s)' % (contents.xpath('err/@msg')[0], contents.xpath('err/@code')[0])
+                    sys.stderr.write('...failed to upload %s attempt %d: %s\n' % (filepath, attempt, error))
+                    attempt = attempt + 1
+                    continue
+                '''
                 return contents.xpath('photoid/text()')[0]
                 complete = True
-        except IOError as e:
+        except IndexError as e:
             sys.stderr.write('...failed to upload %s attempt %d: %s\n' % (filepath, attempt, e))
         attempt = attempt + 1
     raise Exception('Failed to upload %s after %d attempts' % (filepath, MAXRETRIES))
@@ -441,6 +463,6 @@ if __name__ == '__main__':
     try:
         action = sys.argv[1]
         ACTIONS[action](auth, sys.argv[2:])
-    except IOError as e:
-        sys.stderr.write('Failed to complete upload: %s\n' % e)
+    except:
+        sys.stderr.write('Failed to complete upload!\n')
 
