@@ -69,6 +69,7 @@ def check_make_dir (path):
         os.makedirs(path)
 
 def cleanup_widow_albums (tree):
+    sys.stdout.write('Removing widow albums that only contain dummy photo...\n')
     for year in tree.keys():
         for month in tree.get(year).get('collection').keys():
             for album in tree.get(year).get('collection').get(month).get('album').keys():
