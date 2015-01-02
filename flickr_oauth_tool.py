@@ -35,6 +35,7 @@ DUMMYIMG = 'dummy.jpg'
 ROOTDIR = 'photos'  # default photo dir
 PERPAGE = 100       # photos per album page
 PARENT = ' : '      # parent prefix
+VALIDEXT = ['.gif', '.jpg', 'jpeg', '.png']
 URL = {
     'auth': 'https://api.flickr.com/services/auth/',
     'rest': 'https://api.flickr.com/services/rest/',
@@ -42,6 +43,10 @@ URL = {
     'oauth': 'http://www.flickr.com/services/oauth/',
     'callback': 'http://www.flickr.com/',
 }
+
+def action_cleanup (auth, args):
+    cleanup_orphan_photos(auth)
+    #get_photo_perms(auth, auth.get('dummy'))   # ispublic isfriend isfamily permcomment permaddmeta
 
 def action_download (auth, args):
     rootdir = args[0] if len(args) > 0 else ROOTDIR
@@ -64,21 +69,36 @@ def check_oauth_token (auth):
     url = '%s?method=flickr.auth.oauth.checkToken' % URL.get('rest')
     flickr_request(auth, url)
 
+def check_image_files (images):
+    return [ x for x in images if x[-4:].lower() in VALIDEXT ]
+
 def check_make_dir (path):
     if not os.path.exists(path):
         os.makedirs(path)
+
+def cleanup_orphan_photos (auth):
+    photos = get_orphaned_photos(auth)
+    #pprint(photos)
+    for photo in photos:
+        delete_photo(auth, photo.get('id'))
 
 def cleanup_widow_albums (tree):
     sys.stdout.write('Removing widow albums that only contain dummy photo...\n')
     for year in tree.keys():
         if year == 'album':
             continue
-        for month in tree.get(year).get('collection').keys():
-            for album in tree.get(year).get('collection').get(month).get('album').keys():
-                photoset = tree.get(year).get('collection').get(month).get('album').get(album)
-                photos = photoset.get('photos')
-                if photos and len(photos) == 1 and 'dummy' in photos:
-                    delete_album(auth, photoset.get('id'))
+        for month in tree.get(year).get('collection'):
+            yrmo = tree.get(year).get('collection').get(month)
+            if 'album' in yrmo.keys():
+                for album in yrmo.get('album'):
+                    photoset = yrmo.get('album').get(album)
+                    photos = photoset.get('photos')
+                    if not photos:
+                        continue
+                    if photos and len(photos) == 1 and 'dummy' in photos:
+                        sys.stdout.write('Delete %s/%s/%s\n' % (year, month, album))
+                        #print photos
+                        delete_album(auth, photoset.get('id'))
 
 def create_album (auth, cdict, title):
     url = '%s?method=flickr.photosets.create&title=%s&primary_photo_id=%s' \
@@ -179,7 +199,10 @@ def flickr_request (auth, url):
             response = requests.get(nurl, data=request)
             if response.status_code == 200:
                 #print response.text
-                return etree.fromstring(str(response.text))
+                xml = etree.fromstring(str(response.text))
+                if xml.xpath('err/@code'):
+                    sys.stderr.write('Error %s: %s\n' % (xml.xpath('err/@code')[0], xml.xpath('err/@msg')[0]))
+                return xml
                 complete = True
         except IOError as e:
             sys.stderr.write('...failed to %s attempt %d: %s\n' % (caller, attempt, e))
@@ -249,8 +272,22 @@ def get_orphaned_albums (auth, collections):
     collections['album'] = orphans
     return collections
 
-def get_orphaned_photos (auth):
-    url = '%s?method=flickr.photos.getNotInSet' % URL.get('rest')
+def get_orphaned_photos (auth, perpage=PERPAGE, page=1, photos=[]):
+    url = '%s?method=flickr.photos.getNotInSet&page=%s&per_page=%s' \
+            % (URL.get('rest'), page, perpage)
+    contents = flickr_request(auth, url)
+    for photo in contents.xpath('photos/photo'):
+        if photo.xpath('@id')[0] != auth.get('dummy'):
+            photos.append({
+                'id': photo.xpath('@id')[0],
+                'title': photo.xpath('@title')[0],
+            })
+    pages = int(contents.xpath('photos/@pages')[0])
+    total = int(contents.xpath('photos/@total')[0])
+    if page < pages:
+        sys.stdout.write('Retrieving page %d of %d of %d orphaned photos\n' % (page, pages, total))
+        photos = get_orphaned_photos(auth, page=page+1, photos=photos)
+    return photos
 
 def get_photo (auth, id):
     url = '%s?method=flickr.photos.getSizes&photo_id=%s' % (URL.get('rest'), id)
@@ -261,6 +298,11 @@ def get_photo (auth, id):
         'source': largest.xpath('@source')[0],
     }
     return photo
+
+def get_photo_perms (auth, photo):
+    url = '%s?method=flickr.photos.getPerms&photo_id=%s' % (URL.get('rest'), photo)
+    contents = flickr_request(auth, url)
+    return contents.xpath('perms')[0].attrib
 
 def loop_collection (xlist, parent=None):
     xdict = {}
@@ -336,6 +378,12 @@ def set_album_photo (auth, album, photo):
             % (URL.get('rest'), album, photo)
     return flickr_request(auth, url)
 
+def set_photo_perms (auth, photo):
+    url = '%s?method=flickr.photos.setPerms&photo_id=%s' \
+            % (URL.get('rest'), photo) + \
+            '&is_public=0&is_friend=1&is_family=1&perm_comment=1&perm_addmeta=1'
+    return flickr_request(auth, url)
+
 def split_url_to_dict (query):
     udict = {}
     for param in query.split('&'):
@@ -364,11 +412,11 @@ def upload_collection_album (auth, tree, root, name):
 
 def upload_directories (auth, online, rootdir):
     for root, dnames, fnames in os.walk(rootdir, followlinks=True):
-        if root.endswith('offline'):
+        if root.endswith('offline') or root.endswith('.Thumbnails'):
             continue
         croot = root.replace(rootdir + '/', '')
         for dname in dnames:
-            if dname.endswith('offline'):
+            if dname.endswith('offline') or dname.endswith('.Thumbnails'):
                 continue
             if root == rootdir and dname.startswith('20'):
                 if not online.get(dname):
@@ -377,8 +425,9 @@ def upload_directories (auth, online, rootdir):
                 online = create_sub_collection(auth, online, croot, dname)
             else:
                 online = upload_collection_album(auth, online, croot, dname)
-        if fnames:
-            online = upload_album_photos(auth, online, croot, root, fnames)
+        files = check_image_files(fnames)
+        if files:
+            online = upload_album_photos(auth, online, croot, root, files)
     sys.stdout.write('Upload complete\n%s\n' % ('=' * 75))
     #pprint(online)
     cleanup_widow_albums(online)
@@ -391,17 +440,22 @@ def upload_album_photos (auth, tree, root, dir, files):
         parent.insert(1, 'collection')
         parent.extend(['album', ':'.join(root.split('/')[2:])])
     photoset = get_nested(tree, *parent)
-    photos = photoset.get('photos')
+    photos = [ x.lower() for x in photoset.get('photos') ]
     album = photoset.get('id')
     photo = None
+    sys.stdout.write('Checking album %s (%s)\n' % (album, root.split('/')[-1]))
     for file in files:
         name = '%s/%s' % (dir, file)
-        title = name.split('/')[-1].split('.')[0]
+        if name[-4:].lower() in VALIDEXT:
+            title = '.'.join(name.split('/')[-1].split('.')[:-1]).lower()
+        else:
+            title = name.split('/')[-1].lower()
         if title in photos:
             sys.stderr.write('Album %s (%s) already contains photo: %s\n' % (album, root.split('/')[-1], title))
         else:
             photo = upload_photo(auth, name)
             try:
+                set_photo_perms(auth, photo)
                 add_album_photo(auth, album, photo)
             except:
                 delete_photo(auth, photo)
@@ -462,7 +516,7 @@ if __name__ == '__main__':
         cache.close()
     except:
         auth = split_url_to_dict(oauth_request())
-        auth['oauth_verifier'] = oauth_authorize(auth, 'write')
+        auth['oauth_verifier'] = oauth_authorize(auth, 'delete')
 
         auth = split_url_to_dict(oauth_request(auth=auth))
         auth.update({
