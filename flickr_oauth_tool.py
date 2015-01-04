@@ -532,9 +532,18 @@ if __name__ == '__main__':
                 for a in dir(sys.modules[__name__])
                 if a.startswith('action_') }
 
-    try:
-        action = sys.argv[1]
-        ACTIONS[action](auth, sys.argv[2:])
-    except:
+    attempt = 1
+    complete = False
+    while not complete and attempt < MAXRETRIES:
+        try:
+            action = sys.argv[1]
+            ACTIONS[action](auth, sys.argv[2:])
+            complete = True
+        except:
+            sys.stderr.write('...failed to %s attempt %d\n' % (action, attempt))
+        attempt = attempt + 1
+    if not complete:
         sys.stderr.write('Failed to complete %s!\n' % action)
+    else:
+        sys.stdout.write('Completed action: %s!\n' % action)
 
