@@ -291,16 +291,16 @@ def get_orphaned_photos (auth, perpage=PERPAGE, page=1, photos=[]):
     url = '%s?method=flickr.photos.getNotInSet&page=%s&per_page=%s' \
             % (URL.get('rest'), page, perpage)
     contents = flickr_request(auth, url)
+    pages = int(contents.xpath('photos/@pages')[0])
+    total = int(contents.xpath('photos/@total')[0])
+    sys.stdout.write('Retrieved page %d of %d (total of %d) orphaned photos\n' % (page, pages, total))
     for photo in contents.xpath('photos/photo'):
         if photo.xpath('@id')[0] != auth.get('dummy'):
             photos.append({
                 'id': photo.xpath('@id')[0],
                 'title': photo.xpath('@title')[0],
             })
-    pages = int(contents.xpath('photos/@pages')[0])
-    total = int(contents.xpath('photos/@total')[0])
     if page < pages:
-        sys.stdout.write('Retrieving page %d of %d of %d orphaned photos\n' % (page, pages, total))
         photos = get_orphaned_photos(auth, page=page+1, photos=photos)
     return photos
 
