@@ -29,6 +29,8 @@ from datetime import datetime
 
 from flickr_keys import *
 
+DEBUG = False
+SINGLE = False
 MAXRETRIES = 50
 CACHEFILE = 'flickr.oauth.cache'
 DUMMYIMG = 'dummy.jpg'
@@ -55,7 +57,10 @@ def action_download (auth, args):
 def action_upload (auth, args):
     rootdir = args[0] if len(args) > 0 else ROOTDIR
     online = get_collections(auth)
-    upload_directories (auth, online, rootdir)
+    online = upload_directories (auth, online, rootdir)
+    if DEBUG:
+        pprint(online)
+    cleanup_widow_albums(online)
 
 def action_view (auth, args):
     pprint(get_collections(auth))
@@ -68,6 +73,14 @@ def add_album_photo (auth, album, photo):
 def check_oauth_token (auth):
     url = '%s?method=flickr.auth.oauth.checkToken' % URL.get('rest')
     flickr_request(auth, url)
+
+def check_debug (args):
+    global DEBUG, SINGLE
+    for arg in args:
+        if arg == 'debug':
+            DEBUG = True
+        if arg == 'single':
+            SINGLE = True
 
 def check_image_files (images):
     return [ x for x in images if x[-4:].lower() in VALIDEXT ]
@@ -97,8 +110,10 @@ def cleanup_widow_albums (tree):
                         continue
                     if photos and len(photos) == 1 and 'dummy' in photos:
                         sys.stdout.write('Delete %s/%s/%s\n' % (year, month, album))
-                        #print photos
-                        delete_album(auth, photoset.get('id'))
+                        if DEBUG:
+                            print year, month, album, photos
+                        else:
+                            delete_album(auth, photoset.get('id'))
 
 def create_album (auth, cdict, title):
     url = '%s?method=flickr.photosets.create&title=%s&primary_photo_id=%s' \
@@ -188,7 +203,7 @@ def flickr_request (auth, url):
     if title.endswith(auth.get('dummy')):
         title = 'dummy'
     caller = inspect.getouterframes(inspect.currentframe(), 2)[1][3].replace('_', ' ')
-    sys.stdout.write('Attempting to %s %s\n' % (caller, title))
+    sys.stdout.write('[%s] Attempting to %s %s\n' % (datetime.now().strftime('%T'), caller, title))
     url += '&api_key=%s' % APIKEY
     attempt = 1
     complete = False
@@ -412,7 +427,7 @@ def upload_collection_album (auth, tree, root, name):
 
 def upload_directories (auth, online, rootdir):
     for root, dnames, fnames in os.walk(rootdir, followlinks=True):
-        if root.endswith('offline') or root.endswith('.Thumbnails'):
+        if 'offline' in root or root.endswith('.Thumbnails'):
             continue
         croot = root.replace(rootdir + '/', '')
         for dname in dnames:
@@ -429,11 +444,13 @@ def upload_directories (auth, online, rootdir):
         if files:
             online = upload_album_photos(auth, online, croot, root, files)
     sys.stdout.write('Upload complete\n%s\n' % ('=' * 75))
-    #pprint(online)
-    cleanup_widow_albums(online)
+    return online
 
 def upload_album_photos (auth, tree, root, dir, files):
     parent = root.split('/')[:2]
+    if parent[-1] == root.split('/')[-1]:
+        sys.stderr.write('Unsorted photos found in %s, please correctly place them in a subdir to continue.\n' % root)
+        sys.exit(3)
     if len(parent) == 1:
         parent.insert(0, 'album')
     else:
@@ -457,12 +474,15 @@ def upload_album_photos (auth, tree, root, dir, files):
             try:
                 set_photo_perms(auth, photo)
                 add_album_photo(auth, album, photo)
+                photos.append(title)
             except:
                 delete_photo(auth, photo)
     if photo:
         set_album_photo(auth, album, photo)
     if 'dummy' in photos:
         remove_album_photo(auth, album, auth.get('dummy'))
+        photos.remove('dummy')
+    photoset['photos'] = photos
     return tree
 
 def upload_dummy_photo (auth):
@@ -488,8 +508,8 @@ def upload_photo (auth, filepath):
                 '''
                 return contents.xpath('photoid/text()')[0]
                 complete = True
-        except IndexError as e:
-            sys.stderr.write('...failed to upload %s attempt %d: %s\n' % (filepath, attempt, e))
+        except:
+            sys.stderr.write('...failed to upload %s attempt %d\n' % (filepath, attempt))
         attempt = attempt + 1
     raise Exception('Failed to upload %s after %d attempts' % (filepath, MAXRETRIES))
 
@@ -506,9 +526,9 @@ def usage():
 
 if __name__ == '__main__':
     today = str(datetime.now().strftime('%D %r'))
-
     if len(sys.argv) < 2:
         usage()
+    check_debug(sys.argv)
 
     try:
         cache = open(CACHEFILE, 'r')
@@ -532,6 +552,12 @@ if __name__ == '__main__':
                 for a in dir(sys.modules[__name__])
                 if a.startswith('action_') }
 
+    if SINGLE:
+        print 'SINGLE RUN'
+        action = sys.argv[1]
+        ACTIONS[action](auth, sys.argv[2:])
+        sys.exit(0)
+
     attempt = 1
     complete = False
     while not complete and attempt < MAXRETRIES:
@@ -540,10 +566,9 @@ if __name__ == '__main__':
             ACTIONS[action](auth, sys.argv[2:])
             complete = True
         except:
-            sys.stderr.write('...failed to %s attempt %d\n' % (action, attempt))
+            sys.stderr.write('...failed to complete %s attempt %d\n' % (action, attempt))
         attempt = attempt + 1
     if not complete:
         sys.stderr.write('Failed to complete %s!\n' % action)
     else:
         sys.stdout.write('Completed action: %s!\n' % action)
-
