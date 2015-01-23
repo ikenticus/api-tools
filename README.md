@@ -2,5 +2,5 @@
 
 ## flickr
 
-$ python flickr_tool.py
+$ python flickr_oauth_tool.py
 

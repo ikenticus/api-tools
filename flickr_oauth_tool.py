@@ -524,6 +524,10 @@ def usage():
     sys.exit(0)
 
 
+ACTIONS = { a.split('_')[1]:getattr(sys.modules[__name__], a)
+            for a in dir(sys.modules[__name__])
+            if a.startswith('action_') }
+
 if __name__ == '__main__':
     today = str(datetime.now().strftime('%D %r'))
     if len(sys.argv) < 2:
@@ -547,10 +551,6 @@ if __name__ == '__main__':
         cache = open(CACHEFILE, 'w')
         cPickle.dump(auth, cache)
         cache.close()
-
-    ACTIONS = { a.split('_')[1]:getattr(sys.modules[__name__], a)
-                for a in dir(sys.modules[__name__])
-                if a.startswith('action_') }
 
     if SINGLE:
         print 'SINGLE RUN'
